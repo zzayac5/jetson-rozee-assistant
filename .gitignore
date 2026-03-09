@@ -12,3 +12,8 @@ env/
 *.mp3
 *.log
 .DS_Store
+*.onnx
+*.json
+*.wav
+*.broken*
+__pycache__/

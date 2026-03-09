@@ -12,30 +12,28 @@ body {
 
 h2 {
   margin-top: 0;
+  font-size: 36px;
 }
 
 #history {
   white-space: pre-wrap;
-  font-size: 22px;
-  min-height: 250px;
+  font-size: 24px;
+  min-height: 300px;
+  margin-bottom: 24px;
+  border: 1px solid #333;
+  padding: 16px;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
   margin-bottom: 20px;
 }
 
-.input-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-input {
-  font-size: 22px;
-  width: 80%;
-  padding: 10px;
-}
-
 button {
-  font-size: 22px;
-  padding: 10px 16px;
+  font-size: 24px;
+  padding: 16px 24px;
   cursor: pointer;
 }
 
@@ -44,43 +42,29 @@ button:disabled {
   cursor: not-allowed;
 }
 
-#thinking {
-  margin-top: 16px;
-  font-size: 20px;
-  display: none;
-}
-
-.dots::after {
-  content: "";
-  animation: dots 1.2s steps(4, end) infinite;
-}
-
-@keyframes dots {
-  0%   { content: ""; }
-  25%  { content: "."; }
-  50%  { content: ".."; }
-  75%  { content: "..."; }
-  100% { content: ""; }
+#status {
+  font-size: 22px;
+  margin-top: 10px;
 }
 </style>
 </head>
 <body>
 
-<h2>Nora's AI</h2>
+<h2>Rozee</h2>
 
 <div id="history">Ready!</div>
 
-<div class="input-row">
-  <input id="prompt" placeholder="Type here..." />
-  <button id="sendBtn" onclick="send()">Send</button>
+<div class="controls">
+  <button id="talkBtn" onclick="toggleTalk()">Start Talking</button>
 </div>
 
-<div id="thinking">I'm thinking<span class="dots"></span></div>
+<div id="status">Idle</div>
 
 <script>
-let isWaiting = false;
 let conversation = [];
 let currentAssistantText = "";
+let isRecording = false;
+let isBusy = false;
 
 function renderHistory() {
   const history = document.getElementById("history");
@@ -90,98 +74,103 @@ function renderHistory() {
     if (msg.role === "user") {
       text += "You: " + msg.content + "\n\n";
     } else if (msg.role === "assistant") {
-      text += "AI: " + msg.content + "\n\n";
+      text += "Rozee: " + msg.content + "\n\n";
     }
   }
 
   history.innerText = text.trim() || "Ready!";
 }
 
-async function send() {
-  if (isWaiting) return;
+async function toggleTalk() {
+  const talkBtn = document.getElementById("talkBtn");
+  const status = document.getElementById("status");
 
-  const promptInput = document.getElementById("prompt");
-  const sendBtn = document.getElementById("sendBtn");
-  const thinking = document.getElementById("thinking");
+  if (isBusy) return;
 
-  const prompt = promptInput.value.trim();
-  if (!prompt) return;
+  if (!isRecording) {
+    try {
+      const res = await fetch("/start_recording", { method: "POST" });
+      const data = await res.json();
 
-  isWaiting = true;
-  sendBtn.disabled = true;
-  promptInput.disabled = true;
-  thinking.style.display = "block";
+      if (data.error) {
+        status.innerText = "Error: " + data.error;
+        return;
+      }
 
-  promptInput.value = "";
+      isRecording = true;
+      talkBtn.innerText = "Stop Talking";
+      status.innerText = "Listening...";
+    } catch (err) {
+      status.innerText = "Error: " + err.message;
+    }
+  } else {
+    try {
+      isBusy = true;
+      talkBtn.disabled = true;
+      status.innerText = "Stopping...";
 
-  conversation.push({ role: "user", content: prompt });
-  conversation.push({ role: "assistant", content: "" });
-  currentAssistantText = "";
+      await fetch("/stop_recording", { method: "POST" });
 
-  renderHistory();
+      isRecording = false;
+      talkBtn.innerText = "Start Talking";
+      status.innerText = "Transcribing...";
 
-  try {
-    const response = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: conversation.filter(m => m.content !== "")
-      })
-    });
+      conversation.push({ role: "user", content: "" });
+      conversation.push({ role: "assistant", content: "" });
+      currentAssistantText = "";
+      renderHistory();
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
+      const response = await fetch("/voice_turn", { method: "POST" });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
 
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
 
-      buffer += decoder.decode(result.value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop();
+        buffer += decoder.decode(result.value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop();
 
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
 
-        const payload = JSON.parse(part.slice(6));
+          const payload = JSON.parse(part.slice(6));
 
-        if (payload.token) {
-          currentAssistantText += payload.token;
-          conversation[conversation.length - 1].content = currentAssistantText;
-          renderHistory();
-        }
+          if (payload.transcript) {
+            conversation[conversation.length - 2].content = payload.transcript;
+            status.innerText = "Thinking...";
+            renderHistory();
+          }
 
-        if (payload.error) {
-          conversation[conversation.length - 1].content = "ERROR: " + payload.error;
-          renderHistory();
-        }
+          if (payload.token) {
+            currentAssistantText += payload.token;
+            conversation[conversation.length - 1].content = currentAssistantText;
+            status.innerText = "Speaking...";
+            renderHistory();
+          }
 
-        if (payload.done) {
-          thinking.style.display = "none";
-          sendBtn.disabled = false;
-          promptInput.disabled = false;
-          promptInput.focus();
-          isWaiting = false;
+          if (payload.error) {
+            status.innerText = "Error: " + payload.error;
+          }
+
+          if (payload.done) {
+            status.innerText = "Idle";
+            talkBtn.disabled = false;
+            isBusy = false;
+          }
         }
       }
+    } catch (err) {
+      status.innerText = "Error: " + err.message;
+      talkBtn.disabled = false;
+      isBusy = false;
+      isRecording = false;
+      talkBtn.innerText = "Start Talking";
     }
-  } catch (err) {
-    conversation[conversation.length - 1].content = "ERROR: " + err.message;
-    renderHistory();
-    thinking.style.display = "none";
-    sendBtn.disabled = false;
-    promptInput.disabled = false;
-    promptInput.focus();
-    isWaiting = false;
   }
 }
-
-document.getElementById("prompt").addEventListener("keydown", function(event) {
-  if (event.key === "Enter" && !isWaiting) {
-    send();
-  }
-});
 </script>
 
 </body>
