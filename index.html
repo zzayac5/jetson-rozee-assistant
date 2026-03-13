@@ -4,36 +4,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {
+  margin: 0;
   background: black;
   color: white;
   font-family: sans-serif;
-  padding: 20px;
+  padding: 10px;
+  overflow: hidden;
 }
 
 h2 {
-  margin-top: 0;
-  font-size: 36px;
+  margin: 0 0 8px 0;
+  font-size: 24px;
 }
 
 #history {
   white-space: pre-wrap;
-  font-size: 24px;
-  min-height: 300px;
-  margin-bottom: 24px;
+  font-size: 18px;
+  height: 52vh;
+  overflow-y: auto;
+  margin-bottom: 10px;
   border: 1px solid #333;
-  padding: 16px;
+  padding: 10px;
 }
 
 .controls {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 8px;
 }
 
 button {
-  font-size: 24px;
-  padding: 16px 24px;
+  font-size: 18px;
+  padding: 10px 14px;
   cursor: pointer;
 }
 
@@ -43,8 +46,8 @@ button:disabled {
 }
 
 #status {
-  font-size: 22px;
-  margin-top: 10px;
+  font-size: 16px;
+  margin-top: 4px;
 }
 </style>
 </head>
@@ -56,6 +59,7 @@ button:disabled {
 
 <div class="controls">
   <button id="talkBtn" onclick="toggleTalk()">Start Talking</button>
+  <button id="resetBtn" onclick="resetApp()">Reset</button>
 </div>
 
 <div id="status">Idle</div>
@@ -79,37 +83,71 @@ function renderHistory() {
   }
 
   history.innerText = text.trim() || "Ready!";
+  history.scrollTop = history.scrollHeight;
+}
+
+function unlockUI() {
+  const talkBtn = document.getElementById("talkBtn");
+  isBusy = false;
+  isRecording = false;
+  talkBtn.disabled = false;
+  talkBtn.innerText = "Start Talking";
+}
+
+async function resetApp() {
+  const status = document.getElementById("status");
+  const talkBtn = document.getElementById("talkBtn");
+
+  talkBtn.disabled = true;
+  status.innerText = "Resetting...";
+
+  try {
+    await fetch("/reset", { method: "POST" });
+  } catch (err) {
+  }
+
+  unlockUI();
+  status.innerText = "Idle";
 }
 
 async function toggleTalk() {
   const talkBtn = document.getElementById("talkBtn");
   const status = document.getElementById("status");
 
-  if (isBusy) return;
+  if (isBusy && !isRecording) return;
 
   if (!isRecording) {
     try {
       const res = await fetch("/start_recording", { method: "POST" });
       const data = await res.json();
 
-      if (data.error) {
-        status.innerText = "Error: " + data.error;
+      if (!res.ok || data.error) {
+        status.innerText = "Error: " + (data.error || "Failed to start recording");
+        unlockUI();
         return;
       }
 
       isRecording = true;
+      isBusy = true;
       talkBtn.innerText = "Stop Talking";
       status.innerText = "Listening...";
     } catch (err) {
       status.innerText = "Error: " + err.message;
+      unlockUI();
     }
   } else {
     try {
-      isBusy = true;
       talkBtn.disabled = true;
       status.innerText = "Stopping...";
 
-      await fetch("/stop_recording", { method: "POST" });
+      const stopRes = await fetch("/stop_recording", { method: "POST" });
+      const stopData = await stopRes.json();
+
+      if (!stopRes.ok || stopData.error) {
+        status.innerText = "Error: " + (stopData.error || "Failed to stop recording");
+        unlockUI();
+        return;
+      }
 
       isRecording = false;
       talkBtn.innerText = "Start Talking";
@@ -121,6 +159,21 @@ async function toggleTalk() {
       renderHistory();
 
       const response = await fetch("/voice_turn", { method: "POST" });
+
+      if (!response.ok) {
+        let errorText = "Voice turn failed";
+        try {
+          const errData = await response.json();
+          errorText = errData.error || errorText;
+        } catch (e) {}
+        conversation.pop();
+        conversation.pop();
+        renderHistory();
+        status.innerText = "Error: " + errorText;
+        unlockUI();
+        return;
+      }
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
@@ -153,21 +206,24 @@ async function toggleTalk() {
 
           if (payload.error) {
             status.innerText = "Error: " + payload.error;
+            unlockUI();
+            return;
           }
 
           if (payload.done) {
             status.innerText = "Idle";
-            talkBtn.disabled = false;
-            isBusy = false;
+            unlockUI();
+            return;
           }
         }
       }
+
+      status.innerText = "Idle";
+      unlockUI();
+
     } catch (err) {
       status.innerText = "Error: " + err.message;
-      talkBtn.disabled = false;
-      isBusy = false;
-      isRecording = false;
-      talkBtn.innerText = "Start Talking";
+      unlockUI();
     }
   }
 }

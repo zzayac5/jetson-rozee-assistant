@@ -10,10 +10,7 @@ env/
 *.sqlite3
 *.wav
 *.mp3
-*.log
-.DS_Store
 *.onnx
 *.json
-*.wav
 *.broken*
-__pycache__/
+.DS_Store
